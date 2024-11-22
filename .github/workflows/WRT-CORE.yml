@@ -1,0 +1,250 @@
+name: WRT-CORE
+
+on:
+  workflow_call:
+    secrets:
+      MY_TOKEN:
+        required: false
+      WIFI_PASSWORD: 
+        required: false
+    inputs:
+      WRT_TARGET:
+        required: true
+        type: string
+      WRT_THEME:
+        required: true
+        type: string
+      WRT_NAME:
+        required: true
+        type: string
+      WRT_WIFI:
+        required: true
+        type: string
+      WRT_IP:
+        required: true
+        type: string
+      WRT_PW:
+        required: true
+        type: string
+      WRT_REPO:
+        required: true
+        type: string
+      WRT_BRANCH:
+        required: true
+        type: string
+      WRT_SOURCE:
+        required: false
+        type: string
+      WRT_UNAME:
+        required: true
+        type: string
+      WRT_TEST:
+        required: false
+        type: string
+
+env:
+  WRT_TARGET: ${{inputs.WRT_TARGET}}
+  WRT_THEME: ${{inputs.WRT_THEME}}
+  WRT_NAME: ${{inputs.WRT_NAME}}
+  WRT_WIFI: ${{inputs.WRT_WIFI}}
+  WRT_IP: ${{inputs.WRT_IP}}
+  WRT_PW: ${{inputs.WRT_PW}}
+  WRT_REPO: ${{inputs.WRT_REPO}}
+  WRT_SOURCE: ${{inputs.WRT_SOURCE}}
+  WRT_BRANCH: ${{inputs.WRT_BRANCH}}
+  WRT_UNAME: ${{inputs.WRT_UNAME}}
+  WRT_TEST: ${{inputs.WRT_TEST}}
+
+jobs:
+  core:
+    name: ${{inputs.WRT_BRANCH}}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Projects
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space (Ubuntu)
+        if: env.WRT_TEST != 'true'
+        uses: endersonmenezes/free-disk-space@v2
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_swap: true
+          remove_packages: "azure-cli google-cloud-cli microsoft-edge-stable google-chrome-stable firefox postgresql* temurin-* *llvm* mysql* dotnet-sdk-*"
+          remove_packages_one_command: true
+          remove_folders: "/usr/share/swift /usr/share/miniconda /usr/share/az* /usr/share/glade* /usr/local/lib/node_modules /usr/local/share/chromium /usr/local/share/powershell"
+          testing: false
+
+      - name: Initialization Environment
+        if: env.WRT_TEST != 'true'
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt -yqq update
+          sudo -E apt -yqq full-upgrade
+          sudo -E apt -yqq autoremove --purge
+          sudo -E apt -yqq autoclean
+          sudo -E apt -yqq clean
+          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
+          sudo -E systemctl daemon-reload
+          sudo -E timedatectl set-timezone "Asia/Shanghai"
+
+      - name: Clone Code
+        run: |
+          git clone --branch $WRT_BRANCH $WRT_REPO ./wrt/
+
+          cd ./wrt/ && echo "WRT_HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
+
+      - name: Check Scripts
+        run: |
+          find ./ -maxdepth 3 -type f -iregex ".*\(txt\|sh\)$" -exec sed -i 's/\r$//' {} \; -exec chmod +x {} \;
+      
+      - name: Check Caches
+        id: check-cache
+        if: env.WRT_TEST != 'true'
+        uses: actions/cache@main
+        with:
+          key: ${{env.WRT_TARGET}}-${{env.WRT_SOURCE}}-${{env.WRT_BRANCH}}-${{env.WRT_HASH}}
+          path: |
+            ./wrt/.ccache
+            ./wrt/staging_dir/host*
+            ./wrt/staging_dir/tool*
+
+      - name: Update Caches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        if: env.WRT_TEST != 'true'
+        run: |
+          if ${{steps.check-cache.outputs.cache-hit == 'true'}}; then
+            sed -i 's/ $(tool.*\/stamp-compile)//g' ./wrt/Makefile
+            sed -i 's/ $(tool.*\/stamp-install)//g' ./wrt/Makefile
+
+            echo "toolchain skiped done!"
+          else
+            gh extension install actions/gh-actions-cache
+
+            CACHE_LIST=$(gh actions-cache list --key "$WRT_TARGET-${{env.WRT_SOURCE}}-$WRT_BRANCH" | cut -f 1)
+            for CACHE_KEY in $CACHE_LIST; do
+               gh actions-cache delete $CACHE_KEY --confirm
+            done
+
+            echo "caches cleanup done!"
+          fi
+
+      - name: Update Feeds
+        run: |
+          cd ./wrt/
+
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Custom Packages
+        run: |
+          cd ./wrt/package/
+
+          $GITHUB_WORKSPACE/Scripts/Packages.sh
+
+      - name: Customize WiFi Configuration
+        env:
+          WIFI_PASSWORD: ${{ secrets.WIFI_PASSWORD }}
+          WIFI_SSID: ${{ vars.WIFI_SSID }}
+        if: env.WIFI_PASSWORD != '' && env.WIFI_SSID != ''
+        run: |
+          cd ./wrt
+          cp -r $GITHUB_WORKSPACE/Config/99-wifi-custom ./package/base-files/files/etc/uci-defaults
+          
+      - name: Custom Settings
+        run: |
+          cd ./wrt/
+
+          rm -rf ./tmp* ./.config*
+
+          if [ "$WRT_TARGET" != "Mediatek" ]; then
+            cat ./defconfig/mt7981-ax3000.config $GITHUB_WORKSPACE/Config/General.txt >> .config
+          else
+            cat $GITHUB_WORKSPACE/Config/$WRT_TARGET.txt $GITHUB_WORKSPACE/Config/General.txt >> .config
+          fi
+
+          $GITHUB_WORKSPACE/Scripts/Settings.sh
+
+          make defconfig -j$(nproc)
+
+      - name: Download Packages
+        if: env.WRT_TEST != 'true'
+        run: |
+          cd ./wrt/
+
+          make download -j$(nproc)
+
+      - name: Compile Firmware
+        if: env.WRT_TEST != 'true'
+        run: |
+          cd ./wrt/
+
+          make -j$(nproc) || make -j1 V=s
+
+      - name: Machine Information
+        run: |
+          cd ./wrt/
+
+          echo "======================="
+          lscpu | grep -E "name|Core|Thread"
+          echo "======================="
+          df -h
+          echo "======================="
+          du -h --max-depth=1
+          echo "======================="
+
+      - name: Initialization Values
+        run: |
+          export WRT_DATE=$(TZ=UTC-8 date +"%y.%m.%d_%H.%M.%S")
+          export WRT_TYPE=$(sed -n "1{s/^#//;s/\r$//;p;q}" $GITHUB_WORKSPACE/Config/General.txt)
+
+          echo "WRT_DATE=$WRT_DATE" >> $GITHUB_ENV
+          echo "WRT_TYPE=$WRT_TYPE" >> $GITHUB_ENV
+          
+      - name: Package Firmware
+        run: |
+          cd ./wrt/ && mkdir ./upload/
+
+          cp -f ./.config ./upload/Config_"$WRT_TARGET"_"$WRT_DATE".txt
+
+          if [[ $WRT_TEST != 'true' ]]; then
+            find ./bin/targets/ -iregex ".*\(buildinfo\|manifest\|sha256sums\)$" -exec zip -j ./upload/wrt_buildinfo.zip {} \;
+            find ./bin/targets/ -iregex ".*\(buildinfo\|json\|manifest\|sha256sums\|packages\)$" -exec rm -rf {} +
+            
+            for TYPE in $WRT_TYPE ; do
+              if [[ "$WRT_UNAME" == "immortalwrt" ]]; then
+                find ./bin/targets/ -type f -name '*emmc*' -exec rm -rf {} +
+                find ./bin/targets/ -type f -name '*bl2*' ! -name '*mt7981-ram-ddr4-bl2.bin' -exec rm -rf {} +
+              fi
+              for FILE in $(find ./bin/targets/ -type f -iname "*$TYPE*.*") ; do
+                EXT=$(basename $FILE | cut -d '.' -f 2-)
+                NAME=$(basename $FILE | cut -d '.' -f 1 | grep -io "\($TYPE\).*")
+                NEW_FILE="$WRT_TARGET"_"$NAME"_"$WRT_DATE"."$EXT"
+                mv -f $FILE ./upload/$NEW_FILE
+              done
+            done
+
+            find ./bin/targets/ -type f -exec mv -f {} ./upload/ \;
+          fi
+
+      - name: Release Firmware
+        env:
+          PRIVATE_REPO_NAME: ${{ vars.PRIVATE_REPO_NAME }}
+        uses: softprops/action-gh-release@master
+        with:
+          repository: ${{ vars.PRIVATE_REPO_NAME }}
+          token: ${{ secrets.MY_TOKEN }}
+          tag_name: ${{env.WRT_TARGET}}_${{env.WRT_SOURCE}}_${{env.WRT_DATE}}
+          files: ./wrt/upload/*.*
+          body: |
+
+            源码：${{env.WRT_SOURCE}}
+            设备：${{env.WRT_TYPE}}
+            平台：${{env.WRT_TARGET}}
+            分支：${{env.WRT_BRANCH}}
+            地址：${{env.WRT_IP}}
+            密码：${{env.WRT_PW}}
