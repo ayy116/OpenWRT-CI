@@ -1,9 +1,9 @@
 name: OWRT-ALL
 
 on:
-  # 定时编译：每3天凌晨2点
+  # 定时编译：每6天凌晨2点
   schedule:
-    - cron: '00 18 2/3 * *'
+    - cron: '00 18 2/6 * *'
   # 手动编译
   workflow_dispatch:
     inputs:
