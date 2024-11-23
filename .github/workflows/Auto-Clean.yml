@@ -6,7 +6,7 @@ on:
     workflows: ["OWRT-ALL", "WRT-TEST", "OWRT-ONE"]
     types: [completed]
   schedule:
-    - cron: '30 17 2/3 * *'  # 每3天的凌晨1点30执行
+    - cron: '30 17 2/6 * *'  # 每6天的凌晨1点30执行
 
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
