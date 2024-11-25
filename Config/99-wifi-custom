@@ -1,0 +1,26 @@
+#!/bin/sh
+
+# 配置要使用的SSID和密码
+wlan_name="ImmortalWrt"
+wlan_password="12345678"
+
+# 记录潜在错误
+exec >/tmp/setup.log 2>&1
+删除本地ula全局
+uci -q delete network.globals.ula_prefix
+
+# 配置2.4GHz和5GHz WiFi
+if [ -n "$wlan_name" ] && [ -n "$wlan_password" ] && [ ${#wlan_password} -ge 8 ]; then
+  for band in 0 1; do
+    uci set wireless.radio$band.disabled='0'   # 启用射频
+    uci set wireless.@wifi-iface[$band].disabled='0'
+    uci set wireless.@wifi-iface[$band].encryption='sae-mixed'
+    uci set wireless.@wifi-iface[$band].ssid="$wlan_name"
+    uci set wireless.@wifi-iface[$band].key="$wlan_password"
+  done
+
+  uci commit wireless
+fi
+
+echo "All done!"
+exit 0

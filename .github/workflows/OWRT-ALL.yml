@@ -1,0 +1,68 @@
+name: OWRT-ALL
+
+on:
+  # 定时编译：每6天凌晨2点
+  schedule:
+    - cron: '00 18 2/6 * *'
+  # 手动编译
+  workflow_dispatch:
+    inputs:
+      TEST:
+        description: '仅输出配置文件，不编译固件。'
+        default: 'false'
+        required: false
+        type: boolean
+
+# CI权限
+permissions: write-all
+
+# CI任务
+jobs:
+  config:
+    name: ${{ matrix.TARGET }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - TARGET: Mediatek
+            UNAME: immortalwrt
+            SOURCE: immortalwrt.git
+            BRANCH: master
+          - TARGET: Mediatek-hanwckf
+            UNAME: hanwckf
+            SOURCE: immortalwrt-mt798x.git
+            BRANCH: openwrt-21.02
+          - TARGET: Mediatek-Padavanonly
+            UNAME: padavanonly
+            SOURCE: immortalwrt-mt798x-23.05.git
+            BRANCH: openwrt-23.05
+
+    # 调用公用编译核心 WRT-CORE.yml
+    uses: ./.github/workflows/WRT-CORE.yml
+    secrets:
+      MY_TOKEN: ${{ secrets.MY_TOKEN }}
+      WIFI_PASSWORD: ${{ secrets.WIFI_PASSWORD }}
+    with:
+      # 编译平台
+      WRT_TARGET: ${{ matrix.TARGET }}
+      # 默认主题
+      WRT_THEME: argon
+      # 默认主机名
+      WRT_NAME: ImmortalWrt
+      # 默认 WIFI 名
+      WRT_WIFI: ImmortalWrt
+      # 默认地址
+      WRT_IP: 192.168.10.1
+      # 默认密码，仅作提示，修改无用
+      WRT_PW: 无
+      # 源码链接
+      WRT_REPO: https://github.com/${{ matrix.UNAME }}/${{ matrix.SOURCE }}
+      # 源码分支
+      WRT_BRANCH: ${{ matrix.BRANCH }}
+      # 源码名称
+      WRT_SOURCE: ${{ matrix.SOURCE }}
+      # 源码用户名
+      WRT_UNAME: ${{ matrix.UNAME }}
+      # 仅输出配置文件
+      WRT_TEST: ${{ inputs.TEST }}
+      
